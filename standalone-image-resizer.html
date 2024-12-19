@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Resizer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.22.20/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.js"></script>
+    <style>
+        .drag-area {
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            padding: 2rem;
+            text-align: center;
+            transition: all 0.3s;
+        }
+        .drag-area.dragging {
+            border-color: #3b82f6;
+            background-color: #eff6ff;
+        }
+        .preview-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        .checker-bg {
+            background-image: linear-gradient(45deg, #ccc 25%, transparent 25%),
+                            linear-gradient(-45deg, #ccc 25%, transparent 25%),
+                            linear-gradient(45deg, transparent 75%, #ccc 75%),
+                            linear-gradient(-45deg, transparent 75%, #ccc 75%);
+            background-size: 10px 10px;
+            background-position: 0 0, 0 5px, 5px -5px, -5px 0px;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const ImageResizer = () => {
+            const [originalImage, setOriginalImage] = React.useState(null);
+            const [resizedImages, setResizedImages] = React.useState({});
+            const [isDragging, setIsDragging] = React.useState(false);
+            const [originalType, setOriginalType] = React.useState(null);
+
+            const resizeSizes = [64, 32, 16];
+
+            const loadSVG = (file) => {
+                return new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const svg = new Blob([e.target.result], {type: 'image/svg+xml'});
+                        resolve(URL.createObjectURL(svg));
+                    };
+                    reader.readAsText(file);
+                });
+            };
+
+            const resizeImage = async (file, targetSize) => {
+                return new Promise(async (resolve) => {
+                    const img = new Image();
+                    
+                    img.onload = () => {
+                        let width = targetSize;
+                        let height = targetSize;
+                        const aspectRatio = img.width / img.height;
+                        
+                        if (aspectRatio > 1) {
+                            width = targetSize;
+                            height = Math.round(targetSize / aspectRatio);
+                        } else {
+                            height = targetSize;
+                            width = Math.round(targetSize * aspectRatio);
+                        }
+
+                        const tempCanvas = document.createElement('canvas');
+                        tempCanvas.width = width;
+                        tempCanvas.height = height;
+                        const tempCtx = tempCanvas.getContext('2d');
+                        tempCtx.imageSmoothingEnabled = true;
+                        tempCtx.imageSmoothingQuality = 'high';
+                        tempCtx.drawImage(img, 0, 0, width, height);
+
+                        const finalCanvas = document.createElement('canvas');
+                        finalCanvas.width = targetSize;
+                        finalCanvas.height = targetSize;
+                        const finalCtx = finalCanvas.getContext('2d');
+
+                        const x = Math.floor((targetSize - width) / 2);
+                        const y = Math.floor((targetSize - height) / 2);
+
+                        finalCtx.clearRect(0, 0, targetSize, targetSize);
+                        finalCtx.drawImage(tempCanvas, x, y);
+
+                        const imageData = finalCtx.getImageData(0, 0, targetSize, targetSize);
+                        const data = imageData.data;
+                        for (let i = 0; i < data.length; i += 4) {
+                            if (data[i] > 250 && data[i + 1] > 250 && data[i + 2] > 250) {
+                                data[i + 3] = 0;
+                            }
+                        }
+                        finalCtx.putImageData(imageData, 0, 0);
+                        
+                        finalCanvas.toBlob((blob) => {
+                            resolve(URL.createObjectURL(blob));
+                        }, 'image/png');
+                    };
+
+                    if (file.type === 'image/svg+xml') {
+                        const svgUrl = await loadSVG(file);
+                        img.src = svgUrl;
+                    } else {
+                        img.src = URL.createObjectURL(file);
+                    }
+                });
+            };
+
+            const handleDrop = async (e) => {
+                e.preventDefault();
+                setIsDragging(false);
+
+                const file = e.dataTransfer.files[0];
+                if (!file || (!file.type.startsWith('image/png') && file.type !== 'image/svg+xml')) {
+                    alert('PNGまたはSVGファイルをドロップしてください。');
+                    return;
+                }
+
+                setOriginalType(file.type);
+                
+                if (file.type === 'image/svg+xml') {
+                    const svgUrl = await loadSVG(file);
+                    setOriginalImage(svgUrl);
+                } else {
+                    setOriginalImage(URL.createObjectURL(file));
+                }
+
+                const newResizedImages = {};
+                for (const size of resizeSizes) {
+                    newResizedImages[size] = await resizeImage(file, size);
+                }
+                setResizedImages(newResizedImages);
+            };
+
+            const handleDownload = (url, size) => {
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `resized_${size}x${size}.png`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            return (
+                <div className="p-6 max-w-2xl mx-auto">
+                    <div
+                        className={`drag-area ${isDragging ? 'dragging' : ''}`}
+                        onDragOver={(e) => {
+                            e.preventDefault();
+                            setIsDragging(true);
+                        }}
+                        onDragLeave={(e) => {
+                            e.preventDefault();
+                            setIsDragging(false);
+                        }}
+                        onDrop={handleDrop}
+                    >
+                        {!originalImage ? (
+                            <div>
+                                <div className="text-gray-400 text-6xl mb-2">⭳</div>
+                                <p className="text-gray-500">PNGまたはSVGファイルをドラッグ&ドロップしてください</p>
+                            </div>
+                        ) : (
+                            <div className="relative max-w-full max-h-64 mx-auto">
+                                <img
+                                    src={originalImage}
+                                    alt="Original"
+                                    className="max-h-64 mx-auto checker-bg"
+                                />
+                            </div>
+                        )}
+                    </div>
+
+                    {originalImage && (
+                        <div className="preview-grid">
+                            {resizeSizes.map(size => (
+                                <div key={size} className="border rounded p-4 text-center">
+                                    <div 
+                                        className="checker-bg mx-auto"
+                                        style={{
+                                            width: size,
+                                            height: size,
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center'
+                                        }}
+                                    >
+                                        <img
+                                            src={resizedImages[size]}
+                                            alt={`${size}x${size}`}
+                                            style={{
+                                                maxWidth: size,
+                                                maxHeight: size,
+                                                imageRendering: size < 32 ? 'pixelated' : 'auto'
+                                            }}
+                                        />
+                                    </div>
+                                    <p className="text-sm text-gray-600 mt-2">{size}x{size}</p>
+                                    <button
+                                        onClick={() => handleDownload(resizedImages[size], size)}
+                                        className="mt-2 px-3 py-1 text-sm text-white bg-blue-500 rounded hover:bg-blue-600"
+                                    >
+                                        ダウンロード
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        ReactDOM.render(<ImageResizer />, document.getElementById('root'));
+    </script>
+</body>
+</html>
